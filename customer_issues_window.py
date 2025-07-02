@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
 import os
+import json
 from customer_issues_database import enhanced_db
 from customer_issues_file_manager import FileManager
 
@@ -38,6 +39,58 @@ class EnhancedMainWindow:
 
         # ربط أحداث الإغلاق
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        # --- إضافة الإعدادات ---
+        self.config_file = 'config.json'
+        self.settings = self.load_settings()
+        # self.create_menu() # تم إلغاء القائمة العلوية
+
+    def load_settings(self):
+        """تحميل الإعدادات من ملف JSON."""
+        try:
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {"attachments_path": ""} # قيمة افتراضية فارغة
+
+    def save_settings(self):
+        """حفظ الإعدادات في ملف JSON."""
+        with open(self.config_file, 'w', encoding='utf-8') as f:
+            json.dump(self.settings, f, indent=4, ensure_ascii=False)
+
+    def show_settings_window(self):
+        """عرض شاشة الإعدادات."""
+        win = tk.Toplevel(self.root)
+        win.title("الإعدادات")
+        win.geometry("600x200")
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(win, text="مسار حفظ المرفقات المنسوخة:", font=self.fonts['subheader']).pack(pady=(15, 5))
+
+        path_frame = tk.Frame(win)
+        path_frame.pack(fill='x', padx=20)
+
+        path_var = tk.StringVar(value=self.settings.get('attachments_path', ''))
+        path_entry = tk.Entry(path_frame, textvariable=path_var, font=self.fonts['normal'], state='readonly')
+        path_entry.pack(side='left', fill='x', expand=True)
+
+        def select_path():
+            path = filedialog.askdirectory(title="اختر مجلد لحفظ المرفقات")
+            if path:
+                path_var.set(path)
+
+        tk.Button(path_frame, text="اختيار...", command=select_path).pack(side='right', padx=(5, 0))
+
+        def save_and_close():
+            self.settings['attachments_path'] = path_var.get()
+            self.save_settings()
+            messagebox.showinfo("تم الحفظ", "تم حفظ الإعدادات بنجاح.", parent=win)
+            win.destroy()
+
+        save_btn = tk.Button(win, text="حفظ وإغلاق", command=save_and_close, font=self.fonts['button'], bg='#27ae60', fg='white')
+        save_btn.pack(pady=20)
+
 
     def after_main_layout(self):
         """تحميل البيانات الأولية بعد إنشاء كل عناصر الواجهة"""
@@ -634,97 +687,165 @@ class EnhancedMainWindow:
         if not self.current_case_id:
             messagebox.showwarning("تنبيه", "يرجى اختيار أو حفظ حالة أولاً.")
             return
+
+        # 1. نافذة اختيار الملف
+        file_path = filedialog.askopenfilename(title="اختر الملف المرفق")
+        if not file_path:
+            return
+
+        # 2. نافذة اختيار الإجراء (ربط أو نسخ)
+        choice = self.ask_attachment_action()
+        if not choice:
+            return
+
+        # 3. نافذة إدخال الوصف والموظف
+        details = self.ask_attachment_details()
+        if not details:
+            return
+
+        description = details['description']
+        emp_name = details['emp_name']
+        file_info = None
+
+        # 4. تنفيذ الإجراء
+        if choice == 'link':
+            file_info = self.file_manager.get_attachment_info(file_path, description)
+        elif choice == 'copy':
+            attachments_path = self.settings.get('attachments_path')
+            if not attachments_path or not os.path.isdir(attachments_path):
+                messagebox.showerror("خطأ في الإعدادات", "يرجى تحديد مسار صحيح لحفظ المرفقات من قائمة الإعدادات أولاً.")
+                return
+            file_info = self.file_manager.copy_file_to_dedicated_folder(file_path, self.current_case_id, attachments_path, description)
+
+        # 5. حفظ في قاعدة البيانات
+        if file_info:
+            self.save_attachment_to_db(file_info, emp_name)
+
+    def ask_attachment_action(self):
+        """نافذة منبثقة لسؤال المستخدم عن نوع الإجراء (ربط أو نسخ)."""
         win = tk.Toplevel(self.root)
-        win.title("إضافة مرفق")
-        win.geometry("400x260")
-        tk.Label(win, text="اختر الملف:", font=self.fonts['normal']).pack(pady=(10, 0))
-        file_path_var = tk.StringVar()
-        def select_file():
-            file_path = filedialog.askopenfilename()
-            if file_path:
-                file_path_var.set(file_path)
-        file_frame = tk.Frame(win)
-        file_frame.pack(fill='x', padx=20)
-        tk.Entry(file_frame, textvariable=file_path_var, font=self.fonts['normal'], state='readonly').pack(side='left', fill='x', expand=True)
-        tk.Button(file_frame, text="استعراض...", command=select_file).pack(side='right', padx=(5, 0))
+        win.title("اختر إجراء")
+        win.geometry("350x150")
+        win.transient(self.root) # تبقى فوق النافذة الرئيسية
+        win.grab_set() # تمنع التفاعل مع النافذة الرئيسية
+
+        result = tk.StringVar()
+
+        tk.Label(win, text="كيف تريد إضافة المرفق؟", font=self.fonts['subheader']).pack(pady=15)
+
+        btn_frame = tk.Frame(win)
+        btn_frame.pack(pady=10)
+
+        def set_choice(choice):
+            result.set(choice)
+            win.destroy()
+
+        link_btn = tk.Button(btn_frame, text="🔗 ربط بالملف الأصلي", command=lambda: set_choice('link'), width=20, height=2)
+        link_btn.pack(side='right', padx=10)
+
+        copy_btn = tk.Button(btn_frame, text="📋 نسخ للمجلد المخصص", command=lambda: set_choice('copy'), width=20, height=2)
+        copy_btn.pack(side='right', padx=10)
+
+        self.root.wait_window(win) # انتظار إغلاق النافذة
+        return result.get()
+
+    def ask_attachment_details(self):
+        """نافذة لإدخال الوصف واسم الموظف."""
+        win = tk.Toplevel(self.root)
+        win.title("تفاصيل المرفق")
+        win.geometry("400x200")
+        win.transient(self.root)
+        win.grab_set()
+
+        details = {}
+
         tk.Label(win, text="الوصف:", font=self.fonts['normal']).pack(pady=(10, 0))
         desc_var = tk.StringVar()
         tk.Entry(win, textvariable=desc_var, font=self.fonts['normal']).pack(fill='x', padx=20)
-        # اختيار الموظف
+
         tk.Label(win, text="الموظف المسؤول:", font=self.fonts['normal']).pack(pady=(10, 0))
         emp_names = [emp[1] for emp in enhanced_db.get_employees()]
         emp_var = tk.StringVar(value=emp_names[0] if emp_names else "")
         emp_combo = ttk.Combobox(win, values=emp_names, textvariable=emp_var, state='readonly')
         emp_combo.pack(fill='x', padx=20)
-        def save_attachment():
-            file_path = file_path_var.get()
-            description = desc_var.get().strip()
-            emp_name = emp_var.get()
-            if not file_path:
-                messagebox.showerror("خطأ", "يرجى اختيار ملف.")
-                return
-            # التصحيح هنا: استخدم copy_file_to_case_folder بدلاً من select_and_copy_file
-            file_info = self.file_manager.copy_file_to_case_folder(file_path, self.current_case_id, description)
-            print(f"[DEBUG] سيتم تخزين المرفق في المسار: {file_info['file_path'] if file_info else 'None'}")
-            if file_info:
-                file_info['case_id'] = self.current_case_id
-                file_info['upload_date'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                emp_id = None
-                employees = enhanced_db.get_employees() if hasattr(enhanced_db, 'get_employees') else []
-                for emp in employees:
-                    if emp[1] == emp_name:
-                        emp_id = emp[0]
-                        break
-                file_info['uploaded_by'] = emp_id if emp_id else 1
-                file_info['file_type'] = self.file_manager.get_file_type(file_info['file_name'])
-                file_info['description'] = description
-                # تأكد من عدم وجود uploaded_by_name أو أي قيمة غير مطلوبة
-                file_info = {k: v for k, v in file_info.items() if k in ['case_id', 'file_name', 'file_path', 'file_type', 'description', 'upload_date', 'uploaded_by']}
-                print("[DEBUG] بيانات المرفق قبل الحفظ:", file_info)
-                if hasattr(enhanced_db, 'add_attachment'):
-                    enhanced_db.add_attachment(file_info)
-                # تحقق من وجود الملف فعلياً بعد النسخ
-                if not os.path.exists(file_info['file_path']):
-                    messagebox.showerror("تحذير!", f"تم تسجيل المرفق لكن الملف غير موجود فعلياً في المسار:\n{file_info['file_path']}")
-                # سجل التعديلات
-                if hasattr(enhanced_db, 'log_action'):
-                    desc = f"تم إضافة المرفق: {file_info['file_name']} بواسطة {emp_name}"
-                    enhanced_db.log_action(self.current_case_id, "إضافة مرفق", desc, emp_id if emp_id else 1)
-                self.load_attachments()
-                messagebox.showinfo("تمت الإضافة", "تمت إضافة المرفق بنجاح.")
-                win.destroy()
+
+        def save_details():
+            details['description'] = desc_var.get().strip()
+            details['emp_name'] = emp_var.get()
+            win.destroy()
+
         btn_frame = tk.Frame(win)
-        btn_frame.pack(pady=15)
-        tk.Button(btn_frame, text="حفظ", command=save_attachment, width=12).pack(side='right', padx=10)
+        btn_frame.pack(pady=20)
+        tk.Button(btn_frame, text="حفظ", command=save_details, width=12).pack(side='right', padx=10)
         tk.Button(btn_frame, text="إلغاء", command=win.destroy, width=12).pack(side='right')
+
+        self.root.wait_window(win)
+        return details if 'description' in details else None
+
+    def save_attachment_to_db(self, file_info, emp_name):
+        """حفظ معلومات المرفق في قاعدة البيانات (نسخة مصححة)."""
+        # البحث عن هوية الموظف
+        emp_id = None
+        employees = enhanced_db.get_employees() if hasattr(enhanced_db, 'get_employees') else []
+        for emp in employees:
+            if emp[1] == emp_name:
+                emp_id = emp[0]
+                break
+        
+        # إنشاء قاموس بيانات نقي ومباشر لقاعدة البيانات
+        db_data = {
+            'case_id': self.current_case_id,
+            'file_name': file_info.get('file_name'),
+            'file_path': file_info.get('file_path'),
+            'file_type': file_info.get('file_type'),
+            'description': file_info.get('description'),
+            'upload_date': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'uploaded_by': emp_id if emp_id else 1 # استخدام ID الموظف
+        }
+
+        # التحقق من أن المسار سليم قبل الحفظ
+        if not db_data['file_path'] or not isinstance(db_data['file_path'], str):
+            messagebox.showerror("خطأ فادح", "حدث خطأ أثناء معالجة مسار الملف. لم يتم حفظ المرفق.")
+            return
+
+        if hasattr(enhanced_db, 'add_attachment'):
+            enhanced_db.add_attachment(db_data)
+        
+        if hasattr(enhanced_db, 'log_action'):
+            is_linked = True
+            try:
+                # إذا كان مسار الملف يبدأ بمسار المرفقات المخصص، فهو منسوخ
+                attachments_path = self.settings.get('attachments_path')
+                if attachments_path and db_data['file_path'].startswith(os.path.abspath(attachments_path)):
+                    is_linked = False
+            except Exception:
+                pass 
+
+            action_type = "ربط مرفق" if is_linked else "نسخ مرفق"
+            desc = f"تم {action_type.split(' ')[0]} المرفق: {db_data.get('file_name')} بواسطة {emp_name}"
+            enhanced_db.log_action(self.current_case_id, action_type, desc, db_data['uploaded_by'])
+        
+        self.load_attachments()
+        messagebox.showinfo("تم بنجاح", "تمت معالجة المرفق بنجاح.")
 
     def open_attachment(self, event=None):
         selected = self.attachments_tree.selection()
         if not selected:
             return
         item = self.attachments_tree.item(selected[0])
-        file_path = item['values'][-1]
-        print(f"[DEBUG] محاولة فتح المرفق من المسار: {file_path}")
-        # إذا كان المسار نسبي، حوله لمسار كامل من جذر المشروع
-        if not os.path.isabs(file_path):
-            file_path = os.path.abspath(os.path.join(os.getcwd(), file_path))
-        if os.path.exists(file_path):
-            os.startfile(file_path)
+        # المسار المخزن في قاعدة البيانات هو المسار المطلق الكامل
+        full_path = item['values'][-1]
+        
+        print(f"[DEBUG] محاولة فتح المرفق من المسار المطلق: {full_path}")
+
+        if os.path.exists(full_path):
+            try:
+                os.startfile(full_path)
+            except Exception as e:
+                messagebox.showerror("خطأ في الفتح", f"لم يتمكن النظام من فتح الملف.\nالمسار: {full_path}\nالخطأ: {e}")
         else:
-            def reattach_file():
-                new_path = filedialog.askopenfilename(title="اختر الملف الأصلي للمرفق")
-                if new_path:
-                    # تحديث المسار في قاعدة البيانات
-                    attachment_id = item['values'][0]
-                    if hasattr(enhanced_db, 'execute_query'):
-                        enhanced_db.execute_query("UPDATE attachments SET file_path = ? WHERE id = ?", (new_path, attachment_id))
-                    # إعادة تحميل المرفقات
-                    self.load_attachments()
-                    messagebox.showinfo("تم التحديث", "تم تحديث مسار الملف بنجاح. يمكنك الآن فتح المرفق.")
-            msg = f"الملف غير موجود في المسار التالي:\n{file_path}\n\nهل ترغب في إعادة ربط الملف؟"
+            msg = f"الملف غير موجود في المسار التالي:\n{full_path}\n\nقد يكون الملف قد تم حذفه أو نقله. يرجى تحديث المرفق."
             messagebox.showerror("ملف غير موجود", msg)
-            if messagebox.askyesno("ملف غير موجود", msg):
-                reattach_file()
 
     def show_attachment_context_menu(self, event=None):
         menu = tk.Menu(self.root, tearoff=0)
@@ -890,12 +1011,18 @@ class EnhancedMainWindow:
         self.year_combo.set("الكل")
 
     def load_attachments(self):
+        """تحميل مرفقات الحالة وعرضها في الجدول (النسخة المصححة)."""
         for i in self.attachments_tree.get_children():
             self.attachments_tree.delete(i)
+        
         if not self.current_case_id or not hasattr(enhanced_db, 'get_attachments'):
             return
+
+        # get_attachments تعيد الآن قائمة من القواميس (dict) بالأسماء الصحيحة
         attachments = enhanced_db.get_attachments(self.current_case_id)
+        
         for att in attachments:
+            # إدخال البيانات بالترتيب الصحيح والمتوقع للجدول
             self.attachments_tree.insert('', 'end', values=(
                 att.get('id'),
                 att.get('file_type'),
@@ -903,7 +1030,7 @@ class EnhancedMainWindow:
                 att.get('description'),
                 att.get('upload_date'),
                 att.get('uploaded_by_name'),
-                att.get('file_path')  # عمود مسار الملف المخفي
+                att.get('file_path')  # المسار الكامل للملف
             ))
 
     def load_correspondences(self):
@@ -1167,7 +1294,8 @@ class EnhancedMainWindow:
                 case.get('status', ''),
                 case.get('created_date', '')
             ))
-        tk.Button(dash_frame, text="دخول للنظام", font=('Arial', 16, 'bold'), bg='#3498db', fg='white', command=self.show_main_window).pack(pady=20)
+        tk.Button(dash_frame, text="دخول للنظام", font=('Arial', 16, 'bold'), bg='#3498db', fg='white', command=self.show_main_window).pack(pady=10)
+        tk.Button(dash_frame, text="الإعدادات", font=('Arial', 12), bg='#95a5a6', fg='white', command=self.show_settings_window).pack(pady=(0, 20))
 
     def clear_root(self):
         for widget in self.root.winfo_children():

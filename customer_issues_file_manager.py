@@ -11,10 +11,14 @@ except ImportError:
     filedialog = None
     messagebox = None
 
+# تحديد المسار الجذري للمشروع (المجلد الذي يحتوي على هذا الملف)
+# هذا يضمن أن المسارات ستعمل بشكل صحيح بغض النظر عن مكان تشغيل السكربت
+PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+
 class FileManager:
-    def __init__(self, base_path="./files"):
-        # تغيير المسار للعمل بشكل أفضل على جميع الأنظمة
-        self.base_path = os.path.abspath(base_path)
+    def __init__(self, base_path="files"):
+        # استخدام المسار المطلق دائمًا لضمان الموثوقية
+        self.base_path = os.path.join(PROJECT_ROOT, base_path)
         self.ensure_base_directory()
     
     def ensure_base_directory(self):
@@ -31,44 +35,54 @@ class FileManager:
             print(f"تم إنشاء مجلد الحالة: {case_folder}")
         return case_folder
     
-    def copy_file_to_case_folder(self, file_path, case_id, description=""):
-        """نسخ ملف إلى مجلد الحالة"""
+    def copy_file_to_dedicated_folder(self, source_path, case_id, attachments_base_path, description=""):
+        """نسخ ملف إلى مجلد مخصص ومنظم حسب رقم الحالة."""
+        if not source_path or not os.path.exists(source_path):
+            return None
+
+        # إنشاء مجلد الحالة داخل المجلد المخصص
+        case_folder = os.path.join(attachments_base_path, f"case_{case_id}")
+        if not os.path.exists(case_folder):
+            os.makedirs(case_folder)
+
+        file_name = os.path.basename(source_path)
+        # لا يتم تغيير اسم الملف للحفاظ عليه كما هو
+        new_file_path = os.path.join(case_folder, file_name)
+
+        # التحقق إذا كان الملف موجوداً بالفعل
+        if os.path.exists(new_file_path):
+            if not messagebox.askyesno("تأكيد", "ملف بنفس الاسم موجود بالفعل. هل تريد استبداله؟"):
+                return None # أو يمكن إرجاع معلومات الملف الموجود
+
+        try:
+            shutil.copy2(source_path, new_file_path)
+            absolute_path = os.path.abspath(new_file_path)
+            return {
+                'file_name': file_name,
+                'file_path': absolute_path, # <-- إرجاع المسار المطلق للملف المنسوخ
+                'file_type': self.get_file_type(file_name),
+                'description': description,
+                'size': self.get_file_size(absolute_path)
+            }
+        except Exception as e:
+            messagebox.showerror("خطأ في النسخ", f"فشل نسخ الملف: {e}")
+            return None
+
+    def get_attachment_info(self, file_path, description=""):
+        """الحصول على معلومات المرفق دون نسخه، مع استخدام المسار المطلق."""
         if not file_path or not os.path.exists(file_path):
             return None
         
-        # إنشاء مجلد الحالة
-        case_folder = self.create_case_folder(case_id)
-        
-        # الحصول على اسم الملف
         file_name = os.path.basename(file_path)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        new_file_name = f"{timestamp}_{file_name}"
-        new_file_path = os.path.join(case_folder, new_file_name)
+        absolute_path = os.path.abspath(file_path)
         
-        try:
-            # نسخ الملف
-            shutil.copy2(file_path, new_file_path)
-            
-            # المسار النسبي من جذر المشروع
-            rel_path = os.path.relpath(new_file_path, os.path.abspath(os.getcwd()))
-            
-            return {
-                'original_name': file_name,
-                'new_name': new_file_name,
-                'path': rel_path,
-                'file_name': new_file_name,  # <-- add for UI/db compatibility
-                'file_path': rel_path,       # <-- استخدم المسار النسبي فقط
-                'file_type': self.get_file_type(file_name),
-                'description': description,
-                'size': self.get_file_size(new_file_path)
-            }
-        except Exception as e:
-            error_msg = f"فشل في نسخ الملف: {str(e)}"
-            if TKINTER_AVAILABLE and messagebox:
-                messagebox.showerror("خطأ", error_msg)
-            else:
-                print(f"خطأ: {error_msg}")
-            return None
+        return {
+            'file_name': file_name,
+            'file_path': absolute_path,  # <-- تخزين المسار المطلق مباشرة
+            'file_type': self.get_file_type(file_name),
+            'description': description,
+            'size': self.get_file_size(absolute_path)
+        }
     
     def select_and_copy_file(self, case_id, description=""):
         """اختيار ونسخ ملف للحالة"""

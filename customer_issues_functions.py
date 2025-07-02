@@ -263,31 +263,37 @@ class EnhancedFunctions:
         
         # ملء القوائم المنسدلة
         category_widget = widgets.get('category')
-        if category_widget and case_details[13]:  # category_name
-            category_widget.set(case_details[13])
+        if category_widget:
+            # --- التصحيح هنا ---
+            # استعلام قاعدة البيانات يجلب تفاصيل الحالة كسلسلة (tuple)
+            # العمود رقم 18 يحتوي على اسم التصنيف (category_name)
+            category_name = case_details[18] if len(case_details) > 18 else ''
+            category_widget.set(category_name or '') # تحديث القيمة أو إفراغها
         
         status_widget = widgets.get('status')
-        if status_widget and case_details[6]:  # status
-            status_widget.set(case_details[6])
+        if status_widget:
+            status_widget.set(case_details[6] or '') # تحديث القيمة أو إفراغها
     
     def load_case_attachments(self, case_id):
-        """تحميل مرفقات الحالة"""
+        """تحميل مرفقات الحالة (النسخة المصححة)."""
         try:
             # مسح الجدول الحالي
             for item in self.main_window.attachments_tree.get_children():
                 self.main_window.attachments_tree.delete(item)
             
-            # تحميل المرفقات
-            attachments = enhanced_db.get_case_attachments(case_id)
+            # get_attachments تعيد الآن قائمة من القواميس (dict) بالأسماء الصحيحة
+            attachments = enhanced_db.get_attachments(case_id)
             
-            for attachment in attachments:
+            for att in attachments:
+                # إدخال البيانات بالترتيب الصحيح والمتوقع للجدول
                 self.main_window.attachments_tree.insert('', 'end', values=(
-                    attachment[0],  # ID
-                    attachment[4],  # file_type
-                    attachment[2],  # file_name
-                    attachment[5] or '',  # description
-                    attachment[6],  # upload_date
-                    attachment[8] or ''  # uploaded_by_name
+                    att.get('id'),
+                    att.get('file_type'),
+                    att.get('file_name'),
+                    att.get('description'),
+                    att.get('upload_date'),
+                    att.get('uploaded_by_name'),
+                    att.get('file_path')  # المسار الكامل للملف
                 ))
         
         except Exception as e:

@@ -272,7 +272,7 @@ def main():
         
         # استيراد وتشغيل الواجهة الرئيسية
         splash.update()
-        time.sleep(15)  # عرض splash screen لمدة 15 ثانية
+        time.sleep(5)  # عرض splash screen لمدة 3 ثواني
         try:
             from customer_issues_window import EnhancedMainWindow
             

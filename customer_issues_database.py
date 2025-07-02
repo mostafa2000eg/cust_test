@@ -373,9 +373,11 @@ class DatabaseManager:
         return self.execute_query(query, (case_id,))
     
     def get_case_attachments(self, case_id):
-        """الحصول على مرفقات الحالة"""
+        """الحصول على مرفقات الحالة مع تحديد الأعمدة بشكل صريح لتجنب الأخطاء."""
         query = """
-            SELECT a.*, e.name as uploaded_by_name
+            SELECT 
+                a.id, a.case_id, a.file_name, a.file_path, a.file_type, 
+                a.description, a.upload_date, a.uploaded_by, e.name as uploaded_by_name
             FROM attachments a
             LEFT JOIN employees e ON a.uploaded_by = e.id
             WHERE a.case_id = ?
